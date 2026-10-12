@@ -5,14 +5,15 @@
 By bridging numerical ecology with statistical mechanics, IPSDA moves beyond correlative networks to calculate ecological escape velocities, forecast catastrophic phase transitions, and map thermodynamic potential energy landscapes in highly dynamic in vivo models.
 
 ## Core Features
+
 * **Compositional Data Handling**: Native implementation of robust centered log-ratio (rCLR) transformations to map zero-inflated, constrained simplex data into an unconstrained Euclidean space.
 * **Continuous Kinematic Extraction**: Utilizes Generalized Additive Mixed Models (GAMMs) with subject-level random effects to compute continuous velocity and acceleration derivatives from discrete longitudinal sampling.
 * **Active-Set Quadratic Programming**: Resolves inverse-PSO equations strictly within non-physical boundaries to prevent mathematically invalid parameter inferences.
-* **Thermodynamic Landscaping**: Translates swarm parameters into empirical Kinetic Energy (\(KE\)) and Potential Energy (\(U\)) states to identify systemic vulnerabilities, structural resilience, and dysbiosis tipping points.
+* **Thermodynamic Landscaping**: Translates swarm parameters into empirical Kinetic Energy ($KE$) and Potential Energy ($U$) states to identify systemic vulnerabilities, structural resilience, and dysbiosis tipping points.
 
 ## System Requirements & Installation
 
-IPSDA requires R (>= 4.1.0) and relies on several core CRAN and Bioconductor dependencies. 
+IPSDA requires R (>= 4.1.0) and relies on several core CRAN and Bioconductor dependencies.
 
 ```R
 # Install required CRAN packages
@@ -21,6 +22,7 @@ install.packages(c("tidyverse", "mgcv", "nlme", "compositions", "quadprog", "pat
 # Install biomformat from Bioconductor
 if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
 BiocManager::install("biomformat")
+
 ```
 
 ## Quick Start & Usage
@@ -43,7 +45,7 @@ result <- run_advanced_ipsda(
   window_candidates  = c(3.0, 4.0, 5.0, 6.0, 7.0), # Temporal resolution grid
   window_step        = 1.0,
   inertia_candidates = seq(0.1, 0.8, by = 0.1), # Swarm memory grid
-  n_modules          = 4, # Number of synecological guilds
+  max_guilds         = 8, # Max dynamic guilds evaluated (k)
   gamm_k             = 8 # Spline knots for differentiation
 )
 
@@ -54,8 +56,8 @@ result <- run_advanced_ipsda(
 * **`subject_col`**: Essential for robust longitudinal experimental designs. It explicitly informs the GAMM engine of repeated measures, fitting random intercepts to isolate true temporal kinetics from individual host or batch-specific baseline variations.
 * **`time_col`**: Must be a continuous numeric vector representing chronological progression (e.g., days, hours, or weeks post-intervention).
 * **`target_vars`**: A vector of continuous or categorical metadata covariates. IPSDA automatically regresses the extracted swarm parameters ($c_1$, $c_2$, $KE$, $U$) against these host phenotypes to generate statistical overlays.
-* **`window_candidates`** & **`inertia_candidates`**: The framework performs an active-set 2D sliding-window grid search across these temporal spans to maximize local resolution while simultaneously minimizing the variance of the force estimation.
-* **`n_modules`**: Dictates the clustering resolution for synecological environmental filtering. Taxa are grouped into co-abundance modules to mathematically model systemic consensus forces.
+* **`window_candidates`** & **`inertia_candidates`**: The framework performs an active-set 2D sliding-window grid search across these temporal spans to maximise local resolution while simultaneously minimising the variance of the force estimation.
+* **`max_guilds`**: Dictates the upper bound for synecological environmental filtering. Rather than imposing static module counts, IPSDA dynamically evaluates candidate guild topologies up to this limit within each sliding window, determining the optimal ecosystem dimensionality by maximizing the Calinski-Harabasz Index.
 
 ## Expected Outputs
 
@@ -77,4 +79,4 @@ Developed by the **Data Engineering and Systems Biology Lab**, University of Gla
 
 **Repository**: [https://github.com/umerijaz/IPSDA](https://github.com/umerijaz/IPSDA)
 
-If you utilise this computational framework in your research, please cite the corresponding methodology papers covering Inverse Particle Swarm Dynamics Analysis.
+If you utilise this computational framework in your research, please cite the corresponding methodology paper covering Inverse Particle Swarm Dynamics Analysis.
