@@ -2,11 +2,12 @@
 # Purpose:   The pipeline for Inverse-PSO Longitudinal Swarm Dynamics Analysis (IPSDA)
 #            It targets Eco-Thermodynamics, Phase Transitions & Keystone Driver Identification
 #            
-# Version:   1.1
+# Version:   1.2 (Dynamic Guild Optimisation)
 # Authors:   Umer Zeeshan Ijaz (Umer.Ijaz@glasgow.ac.uk)
 #                 http://userweb.eng.gla.ac.uk/umer.ijaz
 #            Ali Zeeshan Ijaz (ali.zeeshan@isb.nu.edu.pk)
 # Created:   2026-10-01
+# Modified:  2026-10-12
 # License:   Copyright (c) 2026 Environmental'Omics Lab, University of Glasgow, UK
 #
 #            This program is free software: you can redistribute it and/or modify
@@ -20,7 +21,7 @@
 #            GNU General Public License for more details.
 #
 #            You should have received a copy of the GNU General Public License
-#            along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#            along with this program.  If not, see .
 ###############################################################################
 
 suppressPackageStartupMessages({
@@ -32,6 +33,7 @@ suppressPackageStartupMessages({
   library(patchwork)     # Camera-ready figure layouts
   library(viridis)       # Colour palettes
   library(ggpubr)        # Camera-ready themes & stats
+  library(cluster)       # Dynamic silhouette optimisation for natural guilds
 })
 
 ###############################################################################
@@ -48,7 +50,7 @@ run_advanced_ipsda <- function(
     window_candidates  = c(3.0, 4.0, 5.0, 6.0, 7.0), # Vector of sliding window spans to optimise
     window_step        = 1.0,        # Sliding step increment
     inertia_candidates = seq(0.1, 0.8, by = 0.1),    # Vector of swarm inertia weights (omega) to optimise
-    n_modules          = 4,          # gbest dynamic clusters
+    max_guilds         = 8,          # Maximum number of dynamic guilds to evaluate per window
     gamm_k             = 8           # Spline knots for GAMM
 ) {
   
@@ -56,6 +58,7 @@ run_advanced_ipsda <- function(
   
   cat("================================================================\n")
   cat("[INFO] Initialising Fully Integrated Eco-Thermodynamic IPSDA Pipeline\n")
+  cat("[INFO] Featuring Dynamic Synecological Guild Resolution\n")
   cat("[INFO] Output Directory:", output_dir, "\n")
   cat("================================================================\n")
   
@@ -183,16 +186,24 @@ run_advanced_ipsda <- function(
   optimisation_scores <- data.frame()
   candidate_results   <- list()
   candidate_meta      <- list()
+  candidate_sil       <- list() 
+  candidate_mod       <- list() 
   
   for (w_sz in window_candidates) {
     for (w_inertia in inertia_candidates) {
+      
+      # Progress print statement for current parameter configuration
+      cat(sprintf("       -> Evaluating: Window Size = %.1f | Inertia Weight (\u03c9) = %.2f\n", w_sz, w_inertia))
       
       min_t <- min(time_vec)
       max_t <- max(time_vec)
       windows <- seq(min_t, max_t - w_sz, by = window_step)
       
-      results <- list()
+      # Initialise tracking lists per parameter pair
+      results          <- list()
       window_meta_list <- list()
+      sil_records      <- list() 
+      mod_records      <- list() 
       
       for (w_start in windows) {
         w_end <- w_start + w_sz
@@ -225,11 +236,60 @@ run_advanced_ipsda <- function(
         w_vel <- vel_mat[w_idx, , drop=FALSE]
         w_acc <- acc_mat[w_idx, , drop=FALSE]
         
-        hc <- hclust(dist(t(w_clr)), method = "ward.D2")
-        clusters <- cutree(hc, k = min(n_modules, ncol(w_clr)))
+        dist_mat <- dist(t(w_clr))
+        hc <- hclust(dist_mat, method = "ward.D2")
         
-        gbest_mat <- matrix(0, nrow = length(w_idx), ncol = n_modules)
-        for (k in 1:n_modules) {
+        # Robust Dynamic Guild Optimisation via Calinski-Harabasz Index
+        valid_k <- 2:min(max_guilds, ncol(w_clr) - 1)
+        best_k  <- 3 # Robust biological fallback
+        
+        if (length(valid_k) > 1) {
+          # Transposed matrix for taxa clustering: rows = taxa (observations), cols = samples (features)
+          taxa_mat <- t(w_clr)
+          
+          ch_evals <- lapply(valid_k, function(k) {
+            temp_clusters <- cutree(hc, k = k)
+            
+            # Fast, native Calinski-Harabasz Index calculation
+            n <- nrow(taxa_mat)
+            overall_mean <- colMeans(taxa_mat)
+            wss <- 0
+            bss <- 0
+            
+            for (cl in unique(temp_clusters)) {
+              sub_mat <- taxa_mat[temp_clusters == cl, , drop = FALSE]
+              nk <- nrow(sub_mat)
+              if (nk == 0) next
+              cl_mean <- colMeans(sub_mat)
+              wss <- wss + sum(rowSums((sub_mat - rep(cl_mean, each = nk))^2))
+              bss <- bss + nk * sum((cl_mean - overall_mean)^2)
+            }
+            
+            ch_score <- if (wss > 0) ((bss / (k - 1)) / (wss / (n - k))) else 0
+            
+            data.frame(
+              Window_Center = w_center,
+              Candidate_k   = k,
+              CH_Index      = ch_score
+            )
+          })
+          
+          ch_df_window <- bind_rows(ch_evals)
+          sil_records[[length(sil_records) + 1]] <- ch_df_window # Preserves list variable name for downstream compatibility
+          
+          # Select k that maximises the Variance Ratio Criterion (CH Index)
+          best_k <- ch_df_window$Candidate_k[which.max(ch_df_window$CH_Index)]
+        }
+        
+        mod_records[[length(mod_records) + 1]] <- data.frame(
+          Window_Center = w_center,
+          Optimal_k     = best_k
+        )
+        
+        clusters <- cutree(hc, k = best_k)
+        
+        gbest_mat <- matrix(0, nrow = length(w_idx), ncol = best_k)
+        for (k in 1:best_k) {
           k_taxa <- names(clusters[clusters == k])
           gbest_mat[, k] <- if(length(k_taxa) == 1) w_clr[, k_taxa] else rowMeans(w_clr[, k_taxa, drop=FALSE])
         }
@@ -242,7 +302,6 @@ run_advanced_ipsda <- function(
           pbest_ij <- max(x_ij)
           gbest_ij <- gbest_mat[, clusters[j]]
           
-          # Dynamical equation incorporating candidate inertia weight (omega)
           Y  <- a_ij + (1 - w_inertia) * v_ij
           X1 <- pbest_ij - x_ij
           X2 <- gbest_ij - x_ij
@@ -255,7 +314,6 @@ run_advanced_ipsda <- function(
           qp_fit <- tryCatch({ solve.QP(Dmat, dvec, Amat, bvec = c(0, 0)) }, error = function(e) NULL)
           c_vals <- if (!is.null(qp_fit)) qp_fit$solution else c(0, 0)
           
-          # Integrated eco-thermodynamic engine
           taxon_ke <- 0.5 * mean(v_ij^2)
           taxon_u  <- -0.5 * c_vals[2] * mean(X2^2)
           
@@ -276,10 +334,14 @@ run_advanced_ipsda <- function(
       if (length(results) > 0) {
         temp_pso_df  <- bind_rows(results)
         temp_meta_df <- bind_rows(window_meta_list)
+        temp_sil_df  <- bind_rows(sil_records)
+        temp_mod_df  <- bind_rows(mod_records)
         
         valid_wins <- length(unique(temp_pso_df$Window_Center))
         
-        # Calculate stability metric across windows
+        # Calculate mean Calinski-Harabasz Index across all resolved windows
+        mean_ch_val <- if (nrow(temp_sil_df) > 0) mean(temp_sil_df$CH_Index, na.rm = TRUE) else 0.0
+        
         win_summary <- temp_pso_df %>%
           group_by(Window_Center) %>%
           summarise(
@@ -292,20 +354,23 @@ run_advanced_ipsda <- function(
             mean_se_c2 = mean(se_c2, na.rm=TRUE)
           )
         
-        # Multi-objective score: maximises temporal resolution while minimising force estimation variance
-        score <- (valid_wins / w_sz) / (win_summary$mean_se_c1 + win_summary$mean_se_c2 + 1e-5)
+        # Multi-objective score: reward valid windows & high cluster separation (CH Index)
+        score <- (valid_wins * max(mean_ch_val, 0.01) / w_sz) / (win_summary$mean_se_c1 + win_summary$mean_se_c2 + 1e-5)
         
         optimisation_scores <- bind_rows(optimisation_scores, data.frame(
-          Window_Size    = w_sz,
-          Inertia_Weight = w_inertia,
-          Valid_Windows  = valid_wins,
-          Mean_SE        = win_summary$mean_se_c1 + win_summary$mean_se_c2,
-          Score          = score
+          Window_Size     = w_sz,
+          Inertia_Weight  = w_inertia,
+          Valid_Windows   = valid_wins,
+          Mean_CH_Index   = mean_ch_val,
+          Mean_SE         = win_summary$mean_se_c1 + win_summary$mean_se_c2,
+          Score           = score
         ))
         
         key_str <- sprintf("w_%.1f_i_%.2f", w_sz, w_inertia)
         candidate_results[[key_str]] <- temp_pso_df
         candidate_meta[[key_str]]    <- temp_meta_df
+        candidate_sil[[key_str]]     <- temp_sil_df
+        candidate_mod[[key_str]]     <- temp_mod_df
       }
     }
   }
@@ -325,6 +390,8 @@ run_advanced_ipsda <- function(
   opt_key <- sprintf("w_%.1f_i_%.2f", opt_w_sz, opt_inertia_w)
   pso_df <- candidate_results[[opt_key]]
   df_window_meta <- candidate_meta[[opt_key]]
+  opt_sil_df     <- candidate_sil[[opt_key]]
+  opt_mod_df     <- candidate_mod[[opt_key]]
   
   write.csv(optimisation_scores, file.path(output_dir, "Window_Inertia_Optimisation_Scores.csv"), row.names = FALSE)
   
@@ -389,7 +456,7 @@ run_advanced_ipsda <- function(
   ))
   
   ##############################################################################
-  # Figure 1: 2D joint optimisation surface & inertia sensitivity
+  # Figure 1: Parameter & Dynamic Module Optimisation (3-Panel)
   ##############################################################################
   p_1a <- ggplot(optimisation_scores, aes(x = Window_Size, y = Inertia_Weight, fill = Score)) +
     geom_tile(color = "white", linewidth = 0.5) +
@@ -397,29 +464,44 @@ run_advanced_ipsda <- function(
     geom_vline(xintercept = opt_w_sz, linetype = "dashed", color = "#D95F02", linewidth = 0.8) +
     geom_hline(yintercept = opt_inertia_w, linetype = "dashed", color = "#D95F02", linewidth = 0.8) +
     geom_point(data = opt_row, aes(x = Window_Size, y = Inertia_Weight), 
-               color = "#D95F02", fill = "#FFFFBF", shape = 23, size = 5, stroke = 1.5) +
+               color = "#D95F02", fill = "#FFFFBF", shape = 23, size = 4, stroke = 1.2) +
     annotate("label", x = opt_w_sz, y = opt_inertia_w, 
              label = sprintf("Optimal: w = %.1f, \u03c9 = %.2f", opt_w_sz, opt_inertia_w), 
-             fill = "white", color = "#D95F02", fontface = "bold", size = 3.2, vjust = -0.45, hjust = 0.5) +
+             fill = "white", color = "#D95F02", fontface = "bold", size = 3.0, vjust = -0.45, hjust = 0.5) +
     scale_x_continuous(breaks = unique(optimisation_scores$Window_Size)) +
     scale_y_continuous(breaks = unique(optimisation_scores$Inertia_Weight)) +
     labs(x = "Candidate Window Size (Timeline Units)", y = "Swarm Inertia Weight (\u03c9)", 
          title = "(a) 2D Joint Parameter Optimisation Surface") +
     theme(panel.grid.major = element_blank())
   
-  p_1b <- ggplot(optimisation_scores, aes(x = Inertia_Weight, y = Score, 
-                                          color = as.factor(Window_Size), 
-                                          group = as.factor(Window_Size))) +
-    geom_line(linewidth = 1) +
-    geom_point(size = 2.5) +
-    scale_color_viridis_d(option = "plasma", name = "Window Size") +
-    scale_x_continuous(breaks = unique(optimisation_scores$Inertia_Weight)) +
-    labs(x = "Swarm Inertia Weight (\u03c9)", y = "Optimisation Score", 
-         title = "(b) Inertia Sensitivity Across Window Candidates")
+  ch_summary <- opt_sil_df %>%
+    group_by(Candidate_k) %>%
+    summarise(Mean_CH = mean(CH_Index, na.rm = TRUE), .groups = "drop")
   
-  fig1 <- p_1a / p_1b + plot_layout(heights = c(1.2, 1))
-  fig1_path <- file.path(output_dir, "Figure1_Window_Inertia_Optimisation.pdf")
-  ggsave(fig1_path, fig1, width = 8, height = 9, dpi = 300, device = cairo_pdf)
+  optimal_k_global <- ch_summary$Candidate_k[which.max(ch_summary$Mean_CH)]
+                                  
+  p_1b <- ggplot(ch_summary, aes(x = Candidate_k, y = Mean_CH)) +
+    geom_line(color = "#1B9E77", linewidth = 1.1) +
+    geom_point(color = "#1B9E77", size = 3.0) +
+    geom_vline(xintercept = optimal_k_global, linetype = "dashed", color = "#D95F02", linewidth = 0.8) +
+    annotate("label", x = optimal_k_global, y = max(ch_summary$Mean_CH, na.rm = TRUE),
+             label = sprintf("Optimal k = %d", optimal_k_global), fill = "white", color = "#D95F02", fontface = "bold", size = 3.0) +
+    scale_x_continuous(breaks = unique(ch_summary$Candidate_k)) +
+    labs(x = "Candidate Guild Count (k)", y = "Calinski-Harabasz Index (Variance Ratio)", 
+         title = "(b) Synecological Dimensionality Optimisation")
+  
+  p_1c <- ggplot(opt_mod_df, aes(x = Window_Center, y = Optimal_k)) +
+    geom_step(color = "#7570B3", linewidth = 1.1) +
+    geom_point(color = "#7570B3", size = 2.5) +
+    scale_x_continuous(breaks = unique(opt_mod_df$Window_Center)) +
+    scale_y_continuous(breaks = scales::breaks_pretty(integer_only = TRUE)) +
+    labs(x = paste(time_col, "(Timeline Center)"), y = "Resolved Guild Count (k)", 
+         title = "(c) Temporal Stability of Module Count") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  fig1 <- p_1a / (p_1b | p_1c) + plot_layout(heights = c(1.2, 1))
+  fig1_path <- file.path(output_dir, "Figure1_Parameter_and_Module_Optimisation.pdf")
+  ggsave(fig1_path, fig1, width = 9, height = 10, dpi = 300, device = cairo_pdf)
   
   ##############################################################################
   # Process summary for optimal window & inertia Pair
@@ -668,9 +750,24 @@ run_advanced_ipsda <- function(
   # 4. Generate Multi-Panel Publication Figure
   
   # Panel A: Temporal Evolution of Niche Strategy
+  # 1. Calculate time-series statistics per Module with a safe fallback for n = 1
+  module_time_stats <- pso_df_mod %>%
+    group_by(Window_Center, Module) %>%
+    summarise(
+      Mean_c1 = mean(c1_Cognitive, na.rm = TRUE),
+      SE_c1   = if(n() > 1) sd(c1_Cognitive, na.rm = TRUE) / sqrt(n()) else 0, # Safe fallback for singletons
+      Mean_c2 = mean(c2_Social, na.rm = TRUE),
+      SE_c2   = if(n() > 1) sd(c2_Social, na.rm = TRUE) / sqrt(n()) else 0,
+      Mean_KE = mean(Kinetic_Energy, na.rm = TRUE),
+      Mean_U  = mean(Potential_Depth, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  # 2. Generate Multi-Panel Publication Figure (Panel A with Point Geom)
   p_6a <- ggplot(module_time_stats, aes(x = Window_Center, y = Mean_c1, color = Module, fill = Module)) +
-    geom_line(linewidth = 1.1) +
-    geom_ribbon(aes(ymin = Mean_c1 - SE_c1, ymax = Mean_c1 + SE_c1), alpha = 0.18, color = NA) +
+    geom_line(linewidth = 1.1, na.rm = TRUE) +
+    geom_point(size = 2, alpha = 0.85, na.rm = TRUE) + # Renders single-window modules as points
+    geom_ribbon(aes(ymin = Mean_c1 - SE_c1, ymax = Mean_c1 + SE_c1), alpha = 0.18, color = NA, na.rm = TRUE) +
     scale_color_viridis_d(option = "turbo", name = "Ecological Guild\n(Module)") +
     scale_fill_viridis_d(option = "turbo", name = "Ecological Guild\n(Module)") +
     labs(
@@ -752,6 +849,6 @@ run_advanced_ipsda <- function(
 #   window_candidates  = c(3.0, 4.0, 5.0, 6.0, 7.0), # Temporal resolution grid
 #   window_step        = 1.0,
 #   inertia_candidates = seq(0.1, 0.8, by = 0.1), # Swarm memory grid
-#   n_modules          = 4, # Number of synecological guilds
+#   max_guilds         = 8, # Maximum number of dynamic guilds to evaluate per window
 #   gamm_k             = 8 # Spline knots for differentiation
 # )
